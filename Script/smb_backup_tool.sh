@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC SMB BACKUP TOOL
-# Version: 1.0.0
+# SMB BACKUP TOOL v1.0.0
+# Description: Backup local folders to remote SMB share
+# ==============================================================================
 # Description: Dual Backup Strategy to SMB Share
 #              1. SYSTEM: Running-Config (Cleaned)
 #              2. DATA:   /opt partition (Excluding volatile files)
