@@ -1,3 +1,14 @@
+<div align="center">
+
+### ❤️ Support the Project
+If you found this project helpful, consider buying me a coffee!
+
+<a href="https://revolut.me/matthew_eli">
+  <img src="https://img.shields.io/badge/Revolut-black?style=for-the-badge&logo=revolut&logoColor=white" alt="Donate with Revolut" />
+</a>
+
+</div>
+
 # 📂 SMB Backup Tool for Keenetic (Entware)
 
 A robust, lightweight Bash script designed to backup your **Keenetic Router** configuration and local directories (Entware environment) to a remote **SMB/CIFS share** (NAS, Windows Share, Linux Server).
