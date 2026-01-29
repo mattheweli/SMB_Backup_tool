@@ -52,7 +52,7 @@ The easiest way to install and manage this tool is using **Keentool**, the packa
 1.  Connect to your router via SSH.
 2.  Download the script:
     ```bash
-    curl -L [https://raw.githubusercontent.com/mattheweli/SMB_Backup_tool/main/smb_backup_tool.sh](https://raw.githubusercontent.com/mattheweli/SMB_Backup_tool/main/smb_backup_tool.sh) -o /opt/bin/smb_backup_tool.sh
+    curl -L https://raw.githubusercontent.com/mattheweli/SMB_Backup_tool/main/smb_backup_tool.sh -o /opt/bin/smb_backup_tool.sh
     ```
 3.  Make it executable:
     ```bash
