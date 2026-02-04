@@ -1,20 +1,16 @@
 #!/bin/sh
 
 # ==============================================================================
-# SMB BACKUP TOOL v1.0.0
+# SMB BACKUP TOOL v1.0.1 (TAR FIX)
 # Description: Backup local folders to remote SMB share
-# ==============================================================================
-# Description: Dual Backup Strategy to SMB Share
-#              1. SYSTEM: Running-Config (Cleaned)
-#              2. DATA:   /opt partition (Excluding volatile files)
-#              3. PURGE:  Interactive (Manual) / Policy-based (Auto)
-#              4. SCHEDULER: Edits /opt/etc/crontab (Persistent Entware)
+# Changelog:
+#   - v1.0.1: Fixed 'tar' compatibility for BusyBox (switched --exclude-from to -X)
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
 # --- CONFIGURATION ---
-VERSION="1.0.0"
+VERSION="1.0.1"
 CONFIG_FILE="/opt/etc/smb_backup.cfg"
 LOG_FILE="/opt/var/log/smb_backup.log"
 TEMP_DIR="/opt/tmp/backup_workdir"
@@ -297,7 +293,8 @@ perform_backup() {
     echo "opt/tmp" >> "$TEMP_DIR/exclude.txt"
     echo "opt/backup_storage" >> "$TEMP_DIR/exclude.txt"
     
-    tar --exclude-from="$TEMP_DIR/exclude.txt" -czf "$TEMP_DIR/$ARCHIVE_OPT" -C "$(dirname $SOURCE_DIR)" "$(basename $SOURCE_DIR)" 2>/tmp/tar_err
+    # FIX for BusyBox tar: use -X instead of --exclude-from
+    tar -X "$TEMP_DIR/exclude.txt" -czf "$TEMP_DIR/$ARCHIVE_OPT" -C "$(dirname $SOURCE_DIR)" "$(basename $SOURCE_DIR)" 2>/tmp/tar_err
     
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
@@ -496,7 +493,7 @@ show_menu() {
         load_config
         header
         
-        echo -e "${InvDkGray}${CWhite}-----------------------------------------------------------------------------${CClear}"
+        echo -e "${InvDkGray}${CWhite}-----------------------------------------------------------------------------${CClear}\n"
         echo " 1. Configure Wizard"
         echo " 2. Run Backup Now"
         if [ ! -z "$RETENTION_DAYS" ]; then
