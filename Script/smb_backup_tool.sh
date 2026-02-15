@@ -1,16 +1,17 @@
 #!/bin/sh
 
 # ==============================================================================
-# SMB BACKUP TOOL v1.0.1 (TAR FIX)
+# SMB BACKUP TOOL v1.0.2 (CRON FIX)
 # Description: Backup local folders to remote SMB share
 # Changelog:
+#   - v1.0.2: Fixed cron job creation and retrofix    
 #   - v1.0.1: Fixed 'tar' compatibility for BusyBox (switched --exclude-from to -X)
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
 # --- CONFIGURATION ---
-VERSION="1.0.1"
+VERSION="1.0.2"
 CONFIG_FILE="/opt/etc/smb_backup.cfg"
 LOG_FILE="/opt/var/log/smb_backup.log"
 TEMP_DIR="/opt/tmp/backup_workdir"
@@ -29,6 +30,30 @@ CClear="\e[0m"
 InvDkGray="\e[1;100m"
 
 # --- UTILITY FUNCTIONS ---
+
+check_and_fix_cron_user() {
+    SCRIPT_PATH=$(readlink -f "$0")
+    # Verifica se il file crontab esiste
+    if [ -f "$CRON_FILE" ]; then
+        # Cerca se lo script è presente nel crontab MA NON preceduto da "root"
+        if grep -Fq "$SCRIPT_PATH" "$CRON_FILE" && ! grep -Fq "root $SCRIPT_PATH" "$CRON_FILE"; then
+            logger_msg "Detected malformed CRON entry (missing user). Fixing..." "WARN"
+            
+            # Usa sed per inserire "root " prima del percorso dello script
+            # Cerca: (qualcosa che finisce con spazio) (/percorso/dello/script)
+            # Sostituisci con: \1root \2
+            sed -i "s|\(.*\) \($SCRIPT_PATH\)|\1 root \2|" "$CRON_FILE"
+            
+            # Verifica se la correzione è andata a buon fine
+            if grep -Fq "root $SCRIPT_PATH" "$CRON_FILE"; then
+                logger_msg "CRON entry fixed successfully." "INFO"
+                restart_cron_service
+            else
+                logger_msg "Failed to fix CRON entry automatically." "ERROR"
+            fi
+        fi
+    fi
+}
 
 logger_msg() {
     TYPE=$2; [ -z "$TYPE" ] && TYPE="INFO"
@@ -85,7 +110,7 @@ check_dependencies() {
     fi
 }
 
-# --- ENTWARE CRON FUNCTIONS (v1.2.8) ---
+# --- ENTWARE CRON FUNCTIONS (v1.0.2) ---
 
 restart_cron_service() {
     # Riavvia il servizio cron per applicare le modifiche
@@ -100,6 +125,8 @@ restart_cron_service() {
 get_cron_status() {
     SCRIPT_PATH=$(readlink -f "$0")
     CRON_CMD="$SCRIPT_PATH -run"
+	
+	FULL_LINE="$CRON_STR root $CRON_CMD"
     
     if [ -f "$CRON_FILE" ] && grep -Fq "$CRON_CMD" "$CRON_FILE"; then
         echo "ACTIVE"
@@ -522,6 +549,7 @@ show_menu() {
 # --- MAIN EXECUTION ---
 check_dependencies
 load_config
+check_and_fix_cron_user
 
 if [ "$1" == "-run" ]; then
     if [ "$CONFIG_STATUS" != "OK" ]; then logger_msg "Missing configuration." "ERROR"; exit 1; fi
