@@ -1,0 +1,19 @@
+{
+  "repository": "mattheweli/SMB_Backup_tool",
+  "release_id": 421547054,
+  "tag": "v2.0.0",
+  "target": "217cca3a3917420c8887003c4bf6dd5313b9ec0e",
+  "validated_run": 39916527426,
+  "pr": 1,
+  "operation_ref": "refs/heads/operations/publish-stable-20261023",
+  "assets": {
+    "SMB_Backup_tool-2.0.0-sources.tar.gz": {
+      "size": 21999,
+      "digest": "sha256:53dca89268019d9a004d6bf17c330eb6b1186ffd0a8fd8726774498a0d8ff99b"
+    },
+    "SMB_Backup_tool-2.0.0-sources.tar.gz.sha256": {
+      "size": 103,
+      "digest": "sha256:07376998bee2db62b68bdf749aa68b0d6398f94e561186bf5cff74acf5296182"
+    }
+  }
+}
