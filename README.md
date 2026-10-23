@@ -1,86 +1,21 @@
-<div align="center">
+# SMB_Backup_tool 2.0.0
 
-### ❤️ Support the Project
-If you found this project helpful, consider buying me a coffee!
+Stable component sources for the KeenTool suite. Release date: 2026-10-22.
 
-<a href="https://paypal.me/MatteoRosettani">
-  <img src="https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate with PayPal" />
-</a>
+## Installation and updates
 
-<a href="https://revolut.me/matthew_eli">
-  <img src="https://img.shields.io/badge/Revolut-black?style=for-the-badge&logo=revolut&logoColor=white" alt="Donate with Revolut" />
-</a>
+Install the complete KeenTool 2.0.0 release from https://github.com/mattheweli/KeenTool/releases. The shared runtime, assets, authentication and security broker are required. Do not copy this component alone over an older installation.
 
-</div>
+For an extracted complete package, use /opt/bin/bash ./install.sh --plan and follow docs/INSTALL.md. Existing public-source and local-alpha installations use --mode upgrade. New installations require --interface and reviewed web/logging ownership options. Existing databases, configuration, credentials and upgrade schedules are preserved.
 
-# 📂 SMB Backup Tool for Keenetic (Entware)
+## Changes
 
-A robust, lightweight Bash script designed to backup your **Keenetic Router** configuration and local directories (Entware environment) to a remote **SMB/CIFS share** (NAS, Windows Share, Linux Server).
+- Stable 2.0.0 uses the shared Entware Bash runtime, atomic job locks and maintenance deferral; selective uninstallation preserves configuration/data by default.
+- Keep existing backup configuration, shares and schedules across package upgrades. Verify completed backup outcomes and expose verified backup state to Security & Health where available.
+- Shared readable HTML/plain notifications and isolated checks for archive/transport failure behavior. No automatic credentials or new SMB backup jobs are introduced by suite installation.
 
-It handles compression, automatic rotation (retention policy), and logging.
+## Release baseline
 
-## ✨ Features
+Public main commit: 48b1a83804c3dc9155b7eeb20f01c942c2f3e3c7. No tags or GitHub Releases existed at preparation time. Stable tag: v2.0.0.
 
-* **Smart Backup:** Compresses directories into `tar.gz` archives with timestamps.
-* **Retention Policy:** Automatically deletes backups older than `X` days to save storage space.
-* **SMB/CIFS Support:** Connects to standard Windows/NAS shares using Entware's Samba client.
-* **Logging:** Detailed operation logs for troubleshooting.
-* **Keentool Ready:** Fully integrated with the [Keentool Manager](https://github.com/mattheweli/keentool).
-
-## 🛠️ Prerequisites
-
-You need a Keenetic router with **Entware** installed.
-
-Required packages:
-* `bash`
-* `tar`
-* `coreutils-date` (for accurate date calculations)
-* `samba4-client` (for SMB connectivity)
-
-**Note:** If you install via **Keentool**, these dependencies are checked and installed automatically.
-
-## 🚀 Installation
-
-### Method 1: Via Keentool (Recommended)
-The easiest way to install and manage this tool is using **Keentool**, the package manager for Keenetic scripts.
-
-1.  Run Keentool.
-2.  Select **SMB Backup Tool** from the menu.
-3.  Keentool will install the script and all required dependencies (`samba4-client`, etc.).
-
-### Method 2: Manual Installation
-1.  Connect to your router via SSH.
-2.  Download the script:
-    ```bash
-    curl -L https://raw.githubusercontent.com/mattheweli/SMB_Backup_tool/main/smb_backup_tool.sh -o /opt/bin/smb_backup_tool.sh
-    ```
-3.  Make it executable:
-    ```bash
-    chmod +x /opt/bin/smb_backup_tool.sh
-    ```
-4.  Install dependencies manually:
-    ```bash
-    opkg update
-    opkg install bash tar coreutils-date samba4-client
-    ```
-
-## ⚙️ Configuration
-
-**Important:** You must edit the script to set your share credentials before running it.
-
-Open the script:
-```bash
-nano /opt/bin/smb_backup_tool.sh
-```
-
-Edit the CONFIGURATION section at the top:
-```bash
-# --- CONFIGURATION ---
-SMB_SERVER="//192.168.1.100/Backups"   # IP and Share Name of your NAS/PC
-SMB_USER="your_username"               # SMB Username
-SMB_PASS="your_password"               # SMB Password
-MOUNT_POINT="/opt/mnt/backup_share"    # Local mount point (auto-created)
-SOURCE_DIR="/opt/etc"                  # Directory to backup (e.g., /opt/etc or /opt/home)
-RETENTION_DAYS=30                      # How many days to keep backups
-LOG_FILE="/opt/var/log/smb_backup.log" # Log file location
-```
+See the complete package's CHANGELOG.md, VERSIONS.md, SECURITY.md and docs/VALIDATION.md for coordinated versions, installation, known feed limitations and test evidence. Development history is archived in docs/history/.
