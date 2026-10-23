@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/opt/bin/bash
+# SMB BACKUP TOOL v2.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
 # SMB BACKUP TOOL v1.0.2 (CRON FIX)
@@ -8,13 +10,16 @@
 #   - v1.0.1: Fixed 'tar' compatibility for BusyBox (switched --exclude-from to -X)
 # ==============================================================================
 
-export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+# smb_backup_tool 2.0.0
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+
 
 # --- CONFIGURATION ---
-VERSION="1.0.2"
-CONFIG_FILE="/opt/etc/smb_backup.cfg"
+VERSION="2.0.0"
+CONFIG_FILE="${KT_SMB_CONFIG:-/opt/etc/smb_backup.cfg}"
 LOG_FILE="/opt/var/log/smb_backup.log"
-TEMP_DIR="/opt/tmp/backup_workdir"
+TEMP_DIR="" # allocated per backup; never shared between runs
 CRON_FILE="/opt/etc/crontab"  # File target per Entware
 
 # Filtro Log per avvisi innocui
@@ -33,18 +38,18 @@ InvDkGray="\e[1;100m"
 
 check_and_fix_cron_user() {
     SCRIPT_PATH=$(readlink -f "$0")
-    # Verifica se il file crontab esiste
+    # Check whether the crontab file exists.
     if [ -f "$CRON_FILE" ]; then
-        # Cerca se lo script è presente nel crontab MA NON preceduto da "root"
+        # Find cron entries for this script that are missing the root user field.
         if grep -Fq "$SCRIPT_PATH" "$CRON_FILE" && ! grep -Fq "root $SCRIPT_PATH" "$CRON_FILE"; then
             logger_msg "Detected malformed CRON entry (missing user). Fixing..." "WARN"
             
-            # Usa sed per inserire "root " prima del percorso dello script
-            # Cerca: (qualcosa che finisce con spazio) (/percorso/dello/script)
+            # Insert "root " before the script path using sed.
+            # Match: (text ending with a space) (/path/to/script).
             # Sostituisci con: \1root \2
             sed -i "s|\(.*\) \($SCRIPT_PATH\)|\1 root \2|" "$CRON_FILE"
             
-            # Verifica se la correzione è andata a buon fine
+            # Verify that the correction succeeded.
             if grep -Fq "root $SCRIPT_PATH" "$CRON_FILE"; then
                 logger_msg "CRON entry fixed successfully." "INFO"
                 restart_cron_service
@@ -83,18 +88,13 @@ load_config() {
 
 save_config() {
     PASS_ENC=$(echo -n "$SMB_PASS" | base64)
-    cat <<EOF > "$CONFIG_FILE"
-# SMB Backup Tool Configuration (v$VERSION)
-SMB_HOST="$SMB_HOST"
-SMB_SHARE="$SMB_SHARE"
-SMB_SUBDIR="$SMB_SUBDIR"
-SMB_USER="$SMB_USER"
-SMB_PASS_ENC="$PASS_ENC"
-SOURCE_DIR="$SOURCE_DIR"
-RETENTION_DAYS="$RETENTION_DAYS"
-AUTO_PURGE="$AUTO_PURGE"
-CRON_LABEL="$CRON_LABEL"
-EOF
+    umask 077
+    CFG_TMP=$(mktemp "${CONFIG_FILE}.XXXXXX") || return 1
+    for name in SMB_HOST SMB_SHARE SMB_SUBDIR SMB_USER SOURCE_DIR RETENTION_DAYS AUTO_PURGE CRON_LABEL; do
+        printf '%s=%q\n' "$name" "${!name}" >> "$CFG_TMP"
+    done
+    printf 'SMB_PASS_ENC=%q\n' "$PASS_ENC" >> "$CFG_TMP"
+    mv "$CFG_TMP" "$CONFIG_FILE" || return 1
     chmod 600 "$CONFIG_FILE"
     logger_msg "Configuration saved to $CONFIG_FILE" "INFO"
     load_config
@@ -113,7 +113,7 @@ check_dependencies() {
 # --- ENTWARE CRON FUNCTIONS (v1.0.2) ---
 
 restart_cron_service() {
-    # Riavvia il servizio cron per applicare le modifiche
+    # Restart cron to apply scheduling changes.
     if [ -x /opt/etc/init.d/S10cron ]; then
         /opt/etc/init.d/S10cron restart >/dev/null 2>&1
     elif which crond >/dev/null 2>&1; then
@@ -155,6 +155,7 @@ configure_schedule_wizard() {
     if [ -z "$IN_HOUR" ]; then IN_HOUR="03"; fi
     if [ -z "$IN_MIN" ]; then IN_MIN="00"; fi
     
+    [[ "$IN_HOUR" =~ ^[0-9]{1,2}$ && "$IN_MIN" =~ ^[0-9]{1,2}$ ]] && ((10#$IN_HOUR <= 23 && 10#$IN_MIN <= 59)) || { echo 'Invalid time'; return 1; }
     case "$FREQ_OPT" in
         1) # Daily
            CRON_STR="$IN_MIN $IN_HOUR * * *"
@@ -180,18 +181,18 @@ configure_schedule_wizard() {
 
     SCRIPT_PATH=$(readlink -f "$0")
     CRON_CMD="$SCRIPT_PATH -run"
-    FULL_LINE="$CRON_STR $CRON_CMD"
+    FULL_LINE="$CRON_STR root $CRON_CMD"
     
     # --- WRITE TO FILE (v1.2.8) ---
     if [ ! -f "$CRON_FILE" ]; then touch "$CRON_FILE"; fi
     
-    # 1. Rimuove eventuali vecchie righe che contengono il comando (usando # come delimitatore)
+    # 1. Remove old entries containing the command (using # as the delimiter).
     sed -i "\#$CRON_CMD#d" "$CRON_FILE"
     
-    # 2. Accoda la nuova riga
+    # 2. Append the new entry.
     echo "$FULL_LINE" >> "$CRON_FILE"
     
-    # 3. Aggiorna etichetta e riavvia servizio
+    # 3. Update the label and restart the service.
     CRON_LABEL="$LABEL_STR"
     save_config
     restart_cron_service
@@ -272,108 +273,97 @@ dump_system_files() {
 
 # --- BACKUP LOGIC ---
 
+smb_safe_path() { [[ "$1" != *['";\\']* && "$1" != *$'\n'* && "$1" != *$'\r'* && "/$1/" != *'/../'* ]]; }
+validate_backup_config() {
+    [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] || { logger_msg 'Invalid retention' ERROR; return 1; }
+    [ -d "$SOURCE_DIR" ] && [ "$SOURCE_DIR" != / ] && [[ "$SOURCE_DIR" != /opt/tmp && "$SOURCE_DIR" != /opt/tmp/* ]] || { logger_msg 'Invalid source directory' ERROR; return 1; }
+    smb_safe_path "$SMB_SUBDIR" && smb_safe_path "$SMB_SHARE" || { logger_msg 'Invalid SMB path' ERROR; return 1; }
+    case "$SMB_USER$SMB_PASS" in *$'\n'*|*$'\r'*) logger_msg 'Newlines in credentials are unsupported' ERROR; return 1;; esac
+}
+smb_run() {
+    local commands=$1 output rc auth
+    auth=$(mktemp /tmp/keentool_smb_auth.XXXXXX) || return 1
+    chmod 600 "$auth"
+    printf 'username = %s\npassword = %s\n' "$SMB_USER" "$SMB_PASS" > "$auth"
+    output=$(mktemp /tmp/keentool_smb_output.XXXXXX) || { rm -f "$auth"; return 1; }
+    timeout 600 smbclient "//${SMB_HOST}/${SMB_SHARE}" -A "$auth" -c "$commands" > "$output" 2>&1
+    rc=$?; rm -f "$auth"
+    # Some smbclient versions return zero after a failing subcommand.
+    if grep -E 'NT_STATUS_' "$output" | grep -v 'NT_STATUS_OBJECT_NAME_COLLISION' >/dev/null; then rc=1; fi
+    grep -vE "$LOG_FILTER" "$output" || :
+    rm -f "$output"; return "$rc"
+}
+smb_cd() {
+    local folder result=""; local -a folders
+    IFS=/ read -r -a folders <<< "$SMB_SUBDIR"
+    for folder in "${folders[@]}"; do
+        [ -z "$folder" ] && continue
+        [ "${1:-}" != create ] || result="$result mkdir \"$folder\";"
+        result="$result cd \"$folder\";"
+    done
+    printf '%s' "$result"
+}
 test_connection() {
-    logger_msg "Testing connection to //${SMB_HOST}/${SMB_SHARE}..." "INFO"
-    TEST_OUT=$(smbclient "//${SMB_HOST}/${SMB_SHARE}" -U "${SMB_USER}%${SMB_PASS}" -c "ls" 2>&1 | grep -vE "$LOG_FILTER")
-    
-    if [ $? -eq 0 ]; then
-        logger_msg "SMB Connection Successful." "INFO"
-        return 0
-    else
-        logger_msg "SMB Connection Failed. Output: $TEST_OUT" "ERROR"
-        return 1
-    fi
+    if smb_run 'ls'; then logger_msg 'SMB Connection Successful' INFO
+    else logger_msg 'SMB Connection Failed' ERROR; return 1; fi
 }
-
-perform_cleanup() {
-    if [ -d "$TEMP_DIR" ]; then
-        rm -rf "$TEMP_DIR"
-    fi
-}
-
+perform_cleanup() { [ -z "$TEMP_DIR" ] || rm -rf "$TEMP_DIR"; }
 perform_backup() {
-    if [ "$CONFIG_STATUS" != "OK" ]; then logger_msg "Configuration invalid or missing." "ERROR"; return; fi
-    
-    echo -e "${CGreen}Backup started. Policy: keep last ${RETENTION_DAYS} days.${CClear}"
-    logger_msg "Backup Started. Policy: $RETENTION_DAYS days, AutoPurge: $AUTO_PURGE." "INFO"
-
-    # Init Clean
-    rm -rf "$TEMP_DIR"
-    mkdir -p "$TEMP_DIR"
-    
-    DATE_STR=$(date "+%Y%m%d_%H%M%S")
-    REMOTE_FOLDER_NAME="${DATE_STR}"
-    
-    # --- STEP 1: PREPARE ARCHIVES ---
+    [ "$CONFIG_STATUS" = OK ] || { logger_msg 'Configuration invalid or missing' ERROR; return 1; }
+    validate_backup_config || return 1
+    kt_init smb-backup || return $?
+    mkdir -p /opt/tmp
+    TEMP_DIR=$(mktemp -d /opt/tmp/keentool-smb.XXXXXX) || return 1
+    trap 'perform_cleanup; kt_cleanup' EXIT
+    umask 077
+    DATE_STR=$(date +%Y%m%d_%H%M%S); REMOTE_FOLDER_NAME="$DATE_STR"
+    logger_msg 'Backup started' INFO
     dump_system_files
-    
-    ARCHIVE_SYS="sys_backup_${DATE_STR}.tar.gz"
-    tar -czf "$TEMP_DIR/$ARCHIVE_SYS" -C "$TEMP_DIR/sys_dump" . 2>/dev/null
-    
-    ARCHIVE_OPT="opt_backup_${DATE_STR}.tar.gz"
-    logger_msg "Archiving $SOURCE_DIR (Compression started)..." "INFO"
-    
-    START_TIME=$(date +%s)
-    
-    # --- EXCLUSION LIST ---
-    echo "opt/var/log" > "$TEMP_DIR/exclude.txt"
-    echo "opt/tmp" >> "$TEMP_DIR/exclude.txt"
-    echo "opt/backup_storage" >> "$TEMP_DIR/exclude.txt"
-    
-    # FIX for BusyBox tar: use -X instead of --exclude-from
-    tar -X "$TEMP_DIR/exclude.txt" -czf "$TEMP_DIR/$ARCHIVE_OPT" -C "$(dirname $SOURCE_DIR)" "$(basename $SOURCE_DIR)" 2>/tmp/tar_err
-    
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-    
-    if [ $DURATION -gt 59 ]; then
-        MINUTES=$((DURATION / 60)); SECONDS=$((DURATION % 60)); TIME_STR="${MINUTES}m ${SECONDS}s"
-    else
-        TIME_STR="${DURATION}s"
+    [ -s "$TEMP_DIR/sys_dump/running-config.txt" ] || { logger_msg 'Router config export failed' ERROR; return 1; }
+    ARCHIVE_SYS="sys_backup_${DATE_STR}.tar.gz"; ARCHIVE_OPT="opt_backup_${DATE_STR}.tar.gz"
+    ARCHIVE_SQL="sqlite_backup_${DATE_STR}.tar.gz"
+    tar -czf "$TEMP_DIR/$ARCHIVE_SYS" -C "$TEMP_DIR/sys_dump" . || return 1
+    source_parent=$(dirname "$SOURCE_DIR"); source_name=$(basename "$SOURCE_DIR")
+    : > "$TEMP_DIR/exclude.txt"
+    for excluded in /opt/var/log /opt/tmp /opt/backup_storage; do
+        [[ "$excluded" = "$SOURCE_DIR"/* ]] && printf '%s\n' "${excluded#"$source_parent/"}" >> "$TEMP_DIR/exclude.txt" || :
+    done
+    # Collect coherent SQLite snapshots separately, preserving relative paths.
+    mkdir -p "$TEMP_DIR/sqlite_snapshots"
+    while IFS= read -r db; do
+        [ "$(head -c 15 "$db")" = 'SQLite format 3' ] || continue
+        command -v sqlite3 >/dev/null || { logger_msg 'sqlite3 needed for live DB backup' ERROR; return 1; }
+        relative=${db#"$source_parent/"}
+        snapshot="$TEMP_DIR/sqlite_snapshots/$relative"; mkdir -p "$(dirname "$snapshot")"
+        kt_sqlite "$db" ".backup '$snapshot'" || return 1
+        [ "$(kt_sqlite "$snapshot" 'PRAGMA quick_check;')" = ok ] || return 1
+        printf '%s\n' "$relative" "$relative-wal" "$relative-shm" >> "$TEMP_DIR/exclude.txt"
+    done < <(find "$SOURCE_DIR" -path /opt/tmp -prune -o -type f -name '*.db' -print)
+    tar -X "$TEMP_DIR/exclude.txt" -czf "$TEMP_DIR/$ARCHIVE_OPT" -C "$source_parent" "$source_name" || { logger_msg 'OPT archive failed' ERROR; return 1; }
+    tar -czf "$TEMP_DIR/$ARCHIVE_SQL" -C "$TEMP_DIR/sqlite_snapshots" . || return 1
+    for archive in "$ARCHIVE_SYS" "$ARCHIVE_OPT" "$ARCHIVE_SQL"; do
+        tar -tzf "$TEMP_DIR/$archive" >/dev/null || { logger_msg 'Invalid archive' ERROR; return 1; }
+    done
+    (cd "$TEMP_DIR" && sha256sum "$ARCHIVE_SYS" "$ARCHIVE_OPT" "$ARCHIVE_SQL" > MANIFEST.sha256) || return 1
+    partial=".incomplete_$REMOTE_FOLDER_NAME"; prefix=$(smb_cd create)
+    cmds="$prefix mkdir \"$partial\"; cd \"$partial\"; lcd \"$TEMP_DIR\"; put \"$ARCHIVE_SYS\"; put \"$ARCHIVE_OPT\"; put \"$ARCHIVE_SQL\"; put MANIFEST.sha256;"
+    smb_run "$cmds" >> "$LOG_FILE" || { logger_msg 'SMB upload failed; retention skipped' ERROR; return 1; }
+    # Read back each archive; verify actual remote bytes before marking complete.
+    for archive in "$ARCHIVE_SYS" "$ARCHIVE_OPT" "$ARCHIVE_SQL"; do
+        smb_run "$(smb_cd) cd \"$partial\"; get \"$archive\" \"$TEMP_DIR/verify.bin\";" >> "$LOG_FILE" || return 1
+        expected=$(sha256sum "$TEMP_DIR/$archive"); expected=${expected%% *}
+        actual=$(sha256sum "$TEMP_DIR/verify.bin" 2>/dev/null); actual=${actual%% *}
+        [ "$actual" = "$expected" ] || { logger_msg 'Remote checksum mismatch; retention skipped' ERROR; return 1; }
+        rm -f "$TEMP_DIR/verify.bin"
+    done
+    smb_run "$(smb_cd) rename \"$partial\" \"$REMOTE_FOLDER_NAME\";" >> "$LOG_FILE" || return 1
+    logger_msg "Backup verified: $REMOTE_FOLDER_NAME" INFO
+    if [ -x /opt/bin/firewall_security ];then
+        /opt/bin/bash /opt/bin/firewall_security backup-event "$REMOTE_FOLDER_NAME" < "$TEMP_DIR/MANIFEST.sha256" || logger_msg 'Verified backup health record could not be saved' WARN
     fi
-    logger_msg "Compression completed in: $TIME_STR" "INFO"
-    
-    # --- STEP 2: UPLOAD ---
-    
-    if [ -f "$TEMP_DIR/$ARCHIVE_OPT" ]; then
-        SIZE_OPT=$(du -h "$TEMP_DIR/$ARCHIVE_OPT" | cut -f1)
-        logger_msg "Archives ready. OPT size: $SIZE_OPT. Uploading..." "INFO"
-        
-        PATH_CMDS=""
-        CLEAN_PATH=$(echo "$SMB_SUBDIR" | sed 's/\// /g')
-        for folder in $CLEAN_PATH; do
-             if [ ! -z "$folder" ] && [ "$folder" != "." ]; then
-                 PATH_CMDS="$PATH_CMDS mkdir \"$folder\"; cd \"$folder\";"
-             fi
-        done
-        
-        FULL_CMDS="$PATH_CMDS mkdir \"$REMOTE_FOLDER_NAME\"; cd \"$REMOTE_FOLDER_NAME\"; lcd \"$TEMP_DIR\"; put \"$ARCHIVE_SYS\"; put \"$ARCHIVE_OPT\";"
-        
-        # Log Filtering
-        SMB_LOG_TMP="$TEMP_DIR/smb_upload.log"
-        smbclient "//${SMB_HOST}/${SMB_SHARE}" -U "${SMB_USER}%${SMB_PASS}" -c "$FULL_CMDS" > "$SMB_LOG_TMP" 2>&1
-        SMB_EXIT_CODE=$?
-        grep -vE "$LOG_FILTER" "$SMB_LOG_TMP" >> "$LOG_FILE"
-        
-        if [ $SMB_EXIT_CODE -eq 0 ]; then
-            logger_msg "Backup completed successfully." "INFO"
-            
-            if [ "$AUTO_PURGE" == "true" ]; then
-                if [ ! -z "$RETENTION_DAYS" ] && [ "$RETENTION_DAYS" -gt 0 ]; then
-                    run_retention_check "AUTO"
-                fi
-            else
-                logger_msg "Auto-Purge skipped (Disabled)." "INFO"
-            fi
-        else
-            logger_msg "SMB Upload Failed (Exit Code: $SMB_EXIT_CODE)." "ERROR"
-        fi
-    else
-        ERR=$(cat /tmp/tar_err)
-        logger_msg "Error creating OPT archive: $ERR" "ERROR"
-    fi
-    
-    perform_cleanup
+    [ "$AUTO_PURGE" != true ] || run_retention_check AUTO || return 1
+    perform_cleanup; kt_cleanup; trap - EXIT INT TERM
+    return 0
 }
 
 run_retention_check() {
@@ -389,15 +379,10 @@ run_retention_check() {
     fi
     logger_msg "Starting Purge Check (Limit: $RETENTION_DAYS days)..." "INFO"
     
-    PATH_CMDS=""
-    CLEAN_PATH=$(echo "$SMB_SUBDIR" | sed 's/\// /g')
-    for folder in $CLEAN_PATH; do
-         [ ! -z "$folder" ] && [ "$folder" != "." ] && PATH_CMDS="$PATH_CMDS cd \"$folder\";"
-    done
-    
-    CMDS="$PATH_CMDS ls"
-    LIST=$(smbclient "//${SMB_HOST}/${SMB_SHARE}" -U "${SMB_USER}%${SMB_PASS}" -c "$CMDS" 2>/dev/null)
-    CUTOFF_TS=$(date -d "-$RETENTION_DAYS days" +%s)
+    smb_safe_path "$SMB_SUBDIR" || return 1
+    PATH_CMDS=$(smb_cd)
+    LIST=$(smb_run "$PATH_CMDS ls") || return 1
+    CUTOFF_TS=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
     
     echo "$LIST" | while read -r LINE; do
         if echo "$LINE" | grep -q " D "; then
@@ -429,7 +414,7 @@ run_retention_check() {
                           logger_msg "Purging old backup folder: $DIRNAME" "WARN"
                           echo -e "${CRed}[DELETE] Deleting $DIRNAME ...${CClear}"
                           DEL_CMD="$PATH_CMDS recurse ON; deltree \"$DIRNAME\""
-                          smbclient "//${SMB_HOST}/${SMB_SHARE}" -U "${SMB_USER}%${SMB_PASS}" -c "$DEL_CMD" 2>&1 | grep -vE "$LOG_FILTER"
+                          smb_run "$DEL_CMD" || return 1
                       fi
                  fi
              fi
@@ -554,7 +539,8 @@ check_and_fix_cron_user
 if [ "$1" == "-run" ]; then
     if [ "$CONFIG_STATUS" != "OK" ]; then logger_msg "Missing configuration." "ERROR"; exit 1; fi
     perform_backup
-    exit 0
+    exit $?
 fi
 
 show_menu
+
